@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-mine-${{ github.ref_name }}
+  group: release-mine
   cancel-in-progress: false
 
 jobs:
@@ -213,33 +213,39 @@ jobs:
             cat <<'EOF'
           set -eu
           app="/Applications/$app_name"
-          process="${app_name%.app}"
+          app_id="com.t3tools.t3code"
           # electron-builder drops +mine from file names, so the installed release is kept in an xattr.
           installed="$(xattr -p dev.t3code.release "$app" 2>/dev/null || true)"
           if [ "$installed" = "$version" ]; then
             echo "T3 Code $version is already installed."
             exit 0
           fi
+          is_running() {
+            [ "$(osascript -e "application id \"$app_id\" is running" 2>/dev/null)" = "true" ]
+          }
           tmp="$(mktemp -d)"
-          trap 'rm -rf "$tmp"' EXIT
+          # Puts the previous app back if the script stops between moving it out and moving the new one in.
+          trap '[ -e "$app" ] || [ ! -e "$tmp/previous" ] || mv "$tmp/previous" "$app"; rm -rf "$tmp"' EXIT
+          trap 'exit 1' HUP INT TERM
           curl -fsSL "$url" -o "$tmp/app.zip"
           echo "$sha256  $tmp/app.zip" | shasum -a 256 -c - >/dev/null
           ditto -x -k "$tmp/app.zip" "$tmp/unpacked"
-          test -d "$tmp/unpacked/$app_name"
+          # The CI build is unsigned apart from Electron's linker signature; seal the bundle ad hoc.
+          codesign --force --deep --sign - "$tmp/unpacked/$app_name"
           running=false
-          if pgrep -x "$process" >/dev/null; then
+          if is_running; then
             running=true
-            osascript -e "quit app \"$process\""
+            osascript -e "tell application id \"$app_id\" to quit"
             for _ in $(seq 60); do
-              pgrep -x "$process" >/dev/null || break
+              is_running || break
               sleep 1
             done
-            if pgrep -x "$process" >/dev/null; then
-              echo "$process did not quit; nothing was changed." >&2
+            if is_running; then
+              echo "T3 Code did not quit; nothing was changed." >&2
               exit 1
             fi
           fi
-          rm -rf "$app"
+          if [ -e "$app" ]; then mv "$app" "$tmp/previous"; fi
           mv "$tmp/unpacked/$app_name" "$app"
           xattr -dr com.apple.quarantine "$app" 2>/dev/null || true
           xattr -w dev.t3code.release "$version" "$app"
@@ -260,7 +266,8 @@ jobs:
             Built from `${{ needs.preflight.outputs.ref }}`.
 
             Mac, newest release: `curl -fsSL ${{ github.server_url }}/${{ github.repository }}/releases/latest/download/install-mac.sh | sh`
-          make_latest: true
+          # GitHub picks latest by semver, then date, so a rerun of an older tag stays behind.
+          make_latest: legacy
           files: |
             release-assets/*.dmg
             release-assets/*.zip
