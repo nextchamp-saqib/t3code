@@ -1,0 +1,278 @@
+name: Release mine
+
+# Fork only. Builds the macOS arm64 app and the Linux x64 CLI archive from one
+# commit and publishes both as one GitHub Release. Pushing the tag
+# v<nearest upstream nightly>+mine.<10-char sha> for a commit starts it. The
+# Mac app is signed ad hoc, so its updater cannot install updates.
+
+on:
+  push:
+    tags:
+      - 'v*\+mine.*'
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: release-mine
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Preflight
+    if: github.repository != 'pingdotgg/t3code'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      ref: ${{ steps.meta.outputs.ref }}
+      clerk_publishable_key: ${{ steps.meta.outputs.clerk_publishable_key }}
+      clerk_jwt_template: ${{ steps.meta.outputs.clerk_jwt_template }}
+      clerk_cli_oauth_client_id: ${{ steps.meta.outputs.clerk_cli_oauth_client_id }}
+      relay_url: ${{ steps.meta.outputs.relay_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      # .env.example carries the public T3 Connect identifiers upstream bakes
+      # into its releases. Relay client tracing needs upstream's Cloudflare
+      # secret, so fork builds ship without it.
+      - id: meta
+        name: Resolve version and public configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$(git describe --tags --match 'v*-nightly.*' --exclude 'v*+mine.*' --abbrev=0 HEAD)"
+          version="${base#v}+mine.$(git rev-parse HEAD | cut -c1-10)"
+          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match this commit; tag it v$version." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          for key in clerk_publishable_key:T3CODE_CLERK_PUBLISHABLE_KEY clerk_jwt_template:T3CODE_CLERK_JWT_TEMPLATE clerk_cli_oauth_client_id:T3CODE_CLERK_CLI_OAUTH_CLIENT_ID relay_url:T3CODE_RELAY_URL; do
+            value="$(sed -n "s/^${key##*:}=//p" .env.example | head -n 1)"
+            if [[ ! "$value" =~ ^[A-Za-z0-9._:/-]+$ ]]; then
+              echo "${key##*:} is missing or malformed in .env.example." >&2
+              exit 1
+            fi
+            echo "${key%%:*}=$value" >> "$GITHUB_OUTPUT"
+          done
+
+  build_bundle:
+    name: Build JS bundle
+    needs: [preflight]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      T3CODE_CLERK_PUBLISHABLE_KEY: ${{ needs.preflight.outputs.clerk_publishable_key }}
+      T3CODE_CLERK_JWT_TEMPLATE: ${{ needs.preflight.outputs.clerk_jwt_template }}
+      T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.preflight.outputs.clerk_cli_oauth_client_id }}
+      T3CODE_RELAY_URL: ${{ needs.preflight.outputs.relay_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+
+      - name: Install bundle dependencies
+        run: vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
+
+      - name: Install browser secret helper build libraries
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+
+      - name: Build JS bundle
+        run: vp run build:desktop
+
+      - name: Upload JS bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: js-bundle
+          path: |
+            apps/server/dist
+            apps/desktop/dist-electron
+          if-no-files-found: error
+          retention-days: 1
+
+  desktop_mac_arm64:
+    name: Desktop macOS arm64
+    needs: [preflight, build_bundle]
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
+      ref: ${{ needs.preflight.outputs.ref }}
+      release_channel: stable
+      relay_client_tracing: false
+      clerk_publishable_key: ${{ needs.preflight.outputs.clerk_publishable_key }}
+      clerk_jwt_template: ${{ needs.preflight.outputs.clerk_jwt_template }}
+      clerk_cli_oauth_client_id: ${{ needs.preflight.outputs.clerk_cli_oauth_client_id }}
+      relay_url: ${{ needs.preflight.outputs.relay_url }}
+      label: macOS arm64
+      runner: macos-26
+      platform: mac
+      target: dmg
+      arch: arm64
+      rust_target: aarch64-apple-darwin
+      resource_key: darwin-arm64
+      cli_archive: false
+
+  # Builds an AppImage too, which is not published; reusing the upstream job
+  # unchanged keeps rebases simple.
+  desktop_linux_x64:
+    name: Desktop Linux x64
+    needs: [preflight, build_bundle]
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
+      ref: ${{ needs.preflight.outputs.ref }}
+      release_channel: stable
+      relay_client_tracing: false
+      clerk_publishable_key: ${{ needs.preflight.outputs.clerk_publishable_key }}
+      clerk_jwt_template: ${{ needs.preflight.outputs.clerk_jwt_template }}
+      clerk_cli_oauth_client_id: ${{ needs.preflight.outputs.clerk_cli_oauth_client_id }}
+      relay_url: ${{ needs.preflight.outputs.relay_url }}
+      label: Linux x64
+      runner: ubuntu-24.04
+      platform: linux
+      target: AppImage
+      arch: x64
+      rust_target: x86_64-unknown-linux-gnu
+      resource_key: linux-x64
+      cli_archive: true
+
+  release:
+    name: Publish GitHub Release
+    needs: [preflight, desktop_mac_arm64, desktop_linux_x64]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+    steps:
+      - name: Download macOS app
+        uses: actions/download-artifact@v8
+        with:
+          name: desktop-mac-arm64
+          path: release-assets
+
+      - name: Download Linux CLI archive
+        uses: actions/download-artifact@v8
+        with:
+          name: cli-linux-x64
+          path: release-assets
+
+      # install-mac.sh is attached to every release, so releases/latest/download/install-mac.sh
+      # always installs the newest one. It does nothing when that version is installed.
+      - name: Write checksums and Mac installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          zips=(T3-Code-*-arm64.zip)
+          if [[ ${#zips[@]} -ne 1 || ! -f "${zips[0]}" ]]; then
+            echo "Expected one macOS arm64 zip, found: ${zips[*]}" >&2
+            exit 1
+          fi
+          zip="${zips[0]}"
+          sha256sum t3-*.tar.gz "$zip" > SHA256SUMS
+          cat SHA256SUMS
+          app_name="$(unzip -Z1 "$zip" | head -n 1 | cut -d/ -f1)"
+          if [[ "$app_name" != *.app ]]; then
+            echo "Unexpected first entry in $zip: $app_name" >&2
+            exit 1
+          fi
+          {
+            echo '#!/bin/sh'
+            echo "# Installs T3 Code $VERSION from $GITHUB_REPOSITORY unless it is already installed."
+            echo "version='$VERSION'"
+            echo "app_name='$app_name'"
+            echo "url='$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/v$VERSION/$zip'"
+            echo "sha256='$(sha256sum "$zip" | cut -d' ' -f1)'"
+            cat <<'EOF'
+          set -eu
+          app="/Applications/$app_name"
+          app_id="com.t3tools.t3code"
+          # electron-builder drops +mine from file names, so the installed release is kept in an xattr.
+          installed="$(xattr -p dev.t3code.release "$app" 2>/dev/null || true)"
+          if [ "$installed" = "$version" ]; then
+            echo "T3 Code $version is already installed."
+            exit 0
+          fi
+          is_running() {
+            [ "$(osascript -e "application id \"$app_id\" is running" 2>/dev/null)" = "true" ]
+          }
+          tmp="$(mktemp -d)"
+          # Puts the previous app back if the script stops between moving it out and moving the new one in.
+          trap '[ -e "$app" ] || [ ! -e "$tmp/previous" ] || mv "$tmp/previous" "$app"; rm -rf "$tmp"' EXIT
+          trap 'exit 1' HUP INT TERM
+          curl -fsSL "$url" -o "$tmp/app.zip"
+          echo "$sha256  $tmp/app.zip" | shasum -a 256 -c - >/dev/null
+          ditto -x -k "$tmp/app.zip" "$tmp/unpacked"
+          # The CI build is unsigned apart from Electron's linker signature; seal the bundle ad hoc.
+          codesign --force --deep --sign - "$tmp/unpacked/$app_name"
+          running=false
+          if is_running; then
+            running=true
+            osascript -e "tell application id \"$app_id\" to quit"
+            for _ in $(seq 60); do
+              is_running || break
+              sleep 1
+            done
+            if is_running; then
+              echo "T3 Code did not quit; nothing was changed." >&2
+              exit 1
+            fi
+          fi
+          if [ -e "$app" ]; then mv "$app" "$tmp/previous"; fi
+          mv "$tmp/unpacked/$app_name" "$app"
+          xattr -dr com.apple.quarantine "$app" 2>/dev/null || true
+          xattr -w dev.t3code.release "$version" "$app"
+          if [ "$running" = true ]; then open "$app"; fi
+          echo "Installed T3 Code $version (was ${installed:-unknown})."
+          EOF
+          } > install-mac.sh
+          sh -n install-mac.sh
+          cat install-mac.sh
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ needs.preflight.outputs.version }}
+          target_commitish: ${{ needs.preflight.outputs.ref }}
+          name: T3 Code v${{ needs.preflight.outputs.version }}
+          body: |
+            Built from `${{ needs.preflight.outputs.ref }}`.
+
+            Mac, newest release: `curl -fsSL ${{ github.server_url }}/${{ github.repository }}/releases/latest/download/install-mac.sh | sh`
+          # GitHub picks latest by semver, then date, so a rerun of an older tag stays behind.
+          make_latest: legacy
+          files: |
+            release-assets/*.dmg
+            release-assets/*.zip
+            release-assets/*.tar.gz
+            release-assets/SHA256SUMS
+            release-assets/install-mac.sh
+          fail_on_unmatched_files: true
+          token: ${{ github.token }}
