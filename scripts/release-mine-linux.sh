@@ -22,6 +22,11 @@ resolve() {
   sha="$(git -C "$repo" rev-parse "${1:-origin/mine}^{commit}")"
   local base
   base="$(git -C "$repo" describe --tags --match 'v*-nightly.*' --exclude 'v*+mine.*' --abbrev=0 "$sha")"
+  # The workflow sees only the fork's tags, so a base missing there would give it another version.
+  if ! git -C "$repo" ls-remote --exit-code -q origin "refs/tags/$base" > /dev/null; then
+    echo "$base is not on origin; push it first." >&2
+    exit 1
+  fi
   version="${base#v}+mine.${sha:0:10}"
 }
 
@@ -50,9 +55,14 @@ cmd_build() {
   VP_NODE_VERSION="$(node -p 'require("./package.json").engines.node')"
   export VP_NODE_VERSION
 
-  local key
+  local key value
   for key in T3CODE_CLERK_PUBLISHABLE_KEY T3CODE_CLERK_JWT_TEMPLATE T3CODE_CLERK_CLI_OAUTH_CLIENT_ID T3CODE_RELAY_URL; do
-    export "$key=$(sed -n "s/^$key=//p" .env.example | head -n 1)"
+    value="$(sed -n "s/^$key=//p" .env.example | head -n 1)"
+    if [[ ! "$value" =~ ^[A-Za-z0-9._:/-]+$ ]]; then
+      echo "$key is missing or malformed in .env.example." >&2
+      exit 1
+    fi
+    export "$key=$value"
   done
 
   vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/scripts...
@@ -71,11 +81,9 @@ cmd_build() {
     --resource-monitor-dir "$src/resource-monitor" --output-dir "$src/release-cli"
   node scripts/smoke-cli-archive.ts --archive "$src"/release-cli/* --expect-version "$version"
 
-  rm -rf "$out.partial"
-  mkdir -p "$out.partial"
-  cp "$src"/release-cli/* "$out.partial/"
-  (cd "$out.partial" && sha256sum t3-*.tar.gz > SHA256SUMS)
-  mv "$out.partial" "$out"
+  (cd "$src/release-cli" && sha256sum t3-*.tar.gz > SHA256SUMS)
+  mkdir -p "$releases"
+  mv -T "$src/release-cli" "$out"
   echo "Built $out" >&2
   echo "$version"
 }
