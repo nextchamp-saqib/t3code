@@ -104,6 +104,26 @@ describe("ssh tunnel scripts", () => {
     );
   });
 
+  it("accepts build metadata and fetches the archive from the given release base", () => {
+    const script = SshTunnel.buildRemoteT3RunnerScript({
+      archiveVersion: "1.2.3-nightly.20260911.4+mine.7e8dbb9f2c",
+      releaseBaseUrl: "https://github.com/fork/t3code/releases/download/",
+    });
+    assert.include(script, "T3_ARCHIVE_VERSION='1.2.3-nightly.20260911.4+mine.7e8dbb9f2c'");
+    assert.include(
+      script,
+      "T3_RELEASE_BASE_URL='https://github.com/fork/t3code/releases/download'",
+    );
+    assert.include(
+      SshTunnel.buildRemoteT3RunnerScript(ARCHIVE),
+      "T3_RELEASE_BASE_URL='https://github.com/pingdotgg/t3code/releases/download'",
+    );
+    assert.throws(
+      () => SshTunnel.buildRemoteT3RunnerScript({ archiveVersion: "1.2.3+mine/evil" }),
+      SshTunnel.SshInvalidArchiveVersionError,
+    );
+  });
+
   it.effect("accepts launch JSON after remote shell startup noise", () => {
     const target = {
       alias: "devbox",

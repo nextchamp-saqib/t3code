@@ -41,6 +41,7 @@ import {
   resolveMacPasskeySigningConfiguration,
   resolveMergedStageDependencies,
   resolveBuildOptions,
+  resolveDesktopProductName,
   stageWslRuntimeArchive,
   ancestorNodeModulesPaths,
   copyDirectoryPreservingSymlinks,
@@ -1671,3 +1672,12 @@ it.effect.skipIf(!symlinksSupported)("rebases packaged links into the isolated t
     );
   }).pipe(Effect.provide(NodeServices.layer)),
 );
+
+it("brands nightly builds with build metadata as Nightly", () => {
+  assert.equal(resolveDesktopProductName("0.1.3-nightly.20261026.3710"), "T3 Code (Nightly)");
+  assert.equal(
+    resolveDesktopProductName("0.1.3-nightly.20261026.3710+mine.7e8dbb9f2c"),
+    "T3 Code (Nightly)",
+  );
+  assert.notEqual(resolveDesktopProductName("0.1.3+mine.7e8dbb9f2c"), "T3 Code (Nightly)");
+});
