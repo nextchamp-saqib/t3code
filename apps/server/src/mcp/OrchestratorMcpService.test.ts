@@ -1728,10 +1728,15 @@ describe("OrchestratorMcpService provider resolution", () => {
           isolation: "worktree",
           projectId: otherProjectId,
           baseRef: "mine",
+          startFromOrigin: true,
           clientRequestId: "delegate-other-project-1",
         });
         assert.isTrue(result._tag === "Success");
-        const workspaceStrategy = { type: "worktree", baseRef: "mine", startFromOrigin: false };
+        const workspaceStrategy = {
+          type: "worktree",
+          baseRef: "mine",
+          startFromOrigin: true,
+        } as const;
         assert.deepEqual(checkedBases, [{ projectId: otherProjectId, workspaceStrategy }]);
         assert.lengthOf(commands, 1);
         assert.deepInclude(commands[0], { projectId: otherProjectId, workspaceStrategy });
@@ -1761,6 +1766,11 @@ describe("OrchestratorMcpService provider resolution", () => {
         message: 'need isolation "worktree"',
       },
       {
+        name: "startFromOrigin without a base ref",
+        input: { isolation: "worktree" as const, startFromOrigin: true },
+        message: "startFromOrigin needs baseRef",
+      },
+      {
         name: "another project without a base ref",
         input: { isolation: "worktree" as const, projectId: otherProjectId },
         message: "Pass baseRef",
@@ -1776,11 +1786,10 @@ describe("OrchestratorMcpService provider resolution", () => {
           ...input,
           clientRequestId: `refuse ${name}`,
         });
-        assert.isTrue(result._tag === "Failure");
-        if (result._tag === "Failure") {
-          assert.equal(result.failure.code, "invalid_request");
-          assert.include(result.failure.message, message);
-        }
+        const failure = result._tag === "Failure" ? result.failure : undefined;
+        assert.ok(failure?._tag === "OrchestratorMcpFailure");
+        assert.equal(failure.code, "invalid_request");
+        assert.include(failure.message, message);
         assert.lengthOf(commands, 0);
       }),
     );

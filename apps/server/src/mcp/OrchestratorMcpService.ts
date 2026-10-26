@@ -2166,6 +2166,9 @@ const make = Effect.gen(function* () {
           'projectId and baseRef need isolation "worktree": the child gets its own checkout.',
         );
       }
+      if (input.startFromOrigin !== undefined && input.baseRef === undefined) {
+        return yield* failure("invalid_request", "startFromOrigin needs baseRef.");
+      }
       const projectId = input.projectId ?? parent.thread.projectId;
       if (projectId !== parent.thread.projectId && input.baseRef === undefined) {
         return yield* failure(
@@ -2200,7 +2203,7 @@ const make = Effect.gen(function* () {
         const strategy = {
           type: "worktree",
           baseRef: input.baseRef,
-          startFromOrigin: false,
+          startFromOrigin: input.startFromOrigin === true,
         } as const;
         yield* threadLaunch
           .checkWorktreeBase({ projectId, workspaceStrategy: strategy })

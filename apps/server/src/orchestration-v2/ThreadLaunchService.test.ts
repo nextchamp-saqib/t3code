@@ -1787,6 +1787,49 @@ it.effect.each([
   }),
 );
 
+it.effect("refuses a delegated child whose project turned off its provider", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const parent = yield* launches.launch(
+      launchInput({
+        command: "command:delegate-parent:disabled",
+        thread: "thread:delegate-parent:disabled",
+        message: "Delegate the ticket",
+      }),
+    );
+    const parentRun = parent.projection.runs[0]!;
+    yield* settings.updateSettings({
+      projectSettingsOverrides: {
+        [otherProjectId]: {
+          providerInstances: { [modelSelection.instanceId]: { enabled: false } },
+        },
+      },
+    });
+
+    const refused = yield* threads
+      .dispatch({
+        type: "delegated_task.request",
+        createdBy: "agent",
+        creationSource: "mcp",
+        commandId: CommandId.make("command:delegate-child:disabled"),
+        parentThreadId: parent.threadId,
+        parentRunId: parentRun.id,
+        parentNodeId: parentRun.rootNodeId!,
+        task: "Build the ticket",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        projectId: otherProjectId,
+        workspaceStrategy: { type: "worktree", baseRef: "mine", startFromOrigin: false },
+      })
+      .pipe(Effect.flip);
+    assert.equal(refused._tag, "ThreadManagementProviderInstanceDisabledError");
+  }).pipe(Effect.provide(harness.layer));
+});
+
 it.effect("creates a strong provider-thread mapping for an imported native session", () => {
   const harness = makeHarness();
   return Effect.gen(function* () {
