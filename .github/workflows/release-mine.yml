@@ -76,6 +76,8 @@ jobs:
       T3CODE_CLERK_JWT_TEMPLATE: ${{ needs.preflight.outputs.clerk_jwt_template }}
       T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.preflight.outputs.clerk_cli_oauth_client_id }}
       T3CODE_RELAY_URL: ${{ needs.preflight.outputs.relay_url }}
+      # The desktop app's SSH launcher installs its own version on the remote from here.
+      T3CODE_RELEASE_BASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/download
     steps:
       - name: Checkout
         uses: actions/checkout@v6
