@@ -155,6 +155,14 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
         "'shared' (default): parent checkout. 'worktree': new prepared checkout from the parent commit, for a separate checkout or PR per child. Uncommitted edits stay out.",
     }),
   ),
+  projectId: Schema.optional(ProjectId).annotate({
+    description:
+      "Isolation 'worktree' only: check out this project's repository instead of yours. Needs `baseRef`. The child stays your subagent.",
+  }),
+  baseRef: Schema.optional(TrimmedNonEmptyString).annotate({
+    description:
+      "Isolation 'worktree' only: branch, tag, or commit to check out instead of your commit.",
+  }),
   mode: Schema.optional(
     Schema.Literals(["async", "wait"]).annotate({
       description:
