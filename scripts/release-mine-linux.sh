@@ -3,7 +3,8 @@
 # release-mine.yml does, and installs it through `t3 update` from a local
 # release directory.
 #
-#   scripts/release-mine-linux.sh build [<commit>]      # default origin/mine
+#   scripts/release-mine-linux.sh version [<commit>]    # default origin/mine
+#   scripts/release-mine-linux.sh build [<commit>]
 #   scripts/release-mine-linux.sh install <version> [t3 update flags...]
 #
 # Needs Vite+ in ~/.local/share/vite-plus and cargo in ~/.cargo. Releases go
@@ -15,13 +16,22 @@ export PATH="$HOME/.local/share/vite-plus/bin:$HOME/.cargo/bin:$PATH"
 releases="${T3_MINE_RELEASES:-$HOME/.cache/t3-mine-releases}"
 repo="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 
-build() {
-  local ref="${1:-origin/mine}"
+# Sets sha and version as release-mine.yml's preflight resolves them.
+resolve() {
   git -C "$repo" fetch -q --tags origin mine
-  local sha base version
-  sha="$(git -C "$repo" rev-parse "$ref^{commit}")"
+  sha="$(git -C "$repo" rev-parse "${1:-origin/mine}^{commit}")"
+  local base
   base="$(git -C "$repo" describe --tags --match 'v*-nightly.*' --exclude 'v*+mine.*' --abbrev=0 "$sha")"
   version="${base#v}+mine.${sha:0:10}"
+}
+
+cmd_version() {
+  resolve "$@"
+  echo "$version"
+}
+
+cmd_build() {
+  resolve "$@"
   local out="$releases/v$version"
   if [[ -f "$out/SHA256SUMS" ]]; then
     echo "Already built: $out" >&2
@@ -61,6 +71,7 @@ build() {
     --resource-monitor-dir "$src/resource-monitor" --output-dir "$src/release-cli"
   node scripts/smoke-cli-archive.ts --archive "$src"/release-cli/* --expect-version "$version"
 
+  rm -rf "$out.partial"
   mkdir -p "$out.partial"
   cp "$src"/release-cli/* "$out.partial/"
   (cd "$out.partial" && sha256sum t3-*.tar.gz > SHA256SUMS)
@@ -69,7 +80,7 @@ build() {
   echo "$version"
 }
 
-install() {
+cmd_install() {
   local version="${1:?usage: install <version> [t3 update flags...]}"
   shift
   [[ -f "$releases/v$version/SHA256SUMS" ]] || { echo "Not built: $releases/v$version" >&2; exit 1; }
@@ -88,7 +99,8 @@ install() {
 }
 
 case "${1:-}" in
-  build) shift; build "$@" ;;
-  install) shift; install "$@" ;;
-  *) sed -n '2,10p' "$0" >&2; exit 2 ;;
+  version) shift; cmd_version "$@" ;;
+  build) shift; cmd_build "$@" ;;
+  install) shift; cmd_install "$@" ;;
+  *) sed -n '2,12p' "$0" >&2; exit 2 ;;
 esac
