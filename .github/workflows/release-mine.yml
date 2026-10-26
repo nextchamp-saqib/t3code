@@ -279,7 +279,7 @@ jobs:
             Built from `${{ needs.preflight.outputs.ref }}`.
 
             Mac, newest release: `curl -fsSL ${{ github.server_url }}/${{ github.repository }}/releases/latest/download/install-mac.sh | sh`
-          # GitHub picks latest by semver, then date, so a rerun of an older tag stays behind.
+          # GitHub picks latest by semver, then date, ignoring +mine: a rerun of an older tag on the same nightly base becomes latest.
           make_latest: legacy
           files: |
             release-assets/*.dmg
