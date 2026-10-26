@@ -183,29 +183,63 @@ jobs:
           name: cli-linux-x64
           path: release-assets
 
+      # install-mac.sh is attached to every release, so releases/latest/download/install-mac.sh
+      # always installs the newest one. It does nothing when that version is installed.
       - name: Write checksums and Mac installer
         shell: bash
         run: |
           set -euo pipefail
           cd release-assets
-          sha256sum t3-*.tar.gz > SHA256SUMS
+          zips=(T3-Code-*-arm64.zip)
+          if [[ ${#zips[@]} -ne 1 || ! -f "${zips[0]}" ]]; then
+            echo "Expected one macOS arm64 zip, found: ${zips[*]}" >&2
+            exit 1
+          fi
+          zip="${zips[0]}"
+          sha256sum t3-*.tar.gz "$zip" > SHA256SUMS
           cat SHA256SUMS
-          zip="T3-Code-$VERSION-arm64.zip"
-          test -f "$zip"
-          cat > install-mac.sh <<EOF
-          #!/bin/sh
-          # Installs T3 Code $VERSION from ${GITHUB_REPOSITORY}.
+          {
+            echo '#!/bin/sh'
+            echo "# Installs T3 Code $VERSION from $GITHUB_REPOSITORY unless it is already installed."
+            echo "version='$VERSION'"
+            echo "url='$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/v$VERSION/$zip'"
+            echo "sha256='$(sha256sum "$zip" | cut -d' ' -f1)'"
+            cat <<'EOF'
           set -eu
-          tmp="\$(mktemp -d)"
-          curl -fL "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/v$VERSION/$zip" -o "\$tmp/app.zip"
-          osascript -e 'quit app "T3 Code"' 2>/dev/null || true
-          rm -rf "/Applications/T3 Code.app"
-          ditto -x -k "\$tmp/app.zip" /Applications
-          xattr -dr com.apple.quarantine "/Applications/T3 Code.app" 2>/dev/null || true
-          rm -rf "\$tmp"
-          open "/Applications/T3 Code.app"
-          echo "Installed T3 Code $VERSION"
+          app="/Applications/T3 Code.app"
+          installed="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist" 2>/dev/null || true)"
+          if [ "$installed" = "$version" ]; then
+            echo "T3 Code $version is already installed."
+            exit 0
+          fi
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          curl -fsSL "$url" -o "$tmp/app.zip"
+          echo "$sha256  $tmp/app.zip" | shasum -a 256 -c - >/dev/null
+          ditto -x -k "$tmp/app.zip" "$tmp/unpacked"
+          test -d "$tmp/unpacked/T3 Code.app"
+          running=false
+          if pgrep -x "T3 Code" >/dev/null; then
+            running=true
+            osascript -e 'quit app "T3 Code"'
+            for _ in $(seq 60); do
+              pgrep -x "T3 Code" >/dev/null || break
+              sleep 1
+            done
+            if pgrep -x "T3 Code" >/dev/null; then
+              echo "T3 Code did not quit; nothing was changed." >&2
+              exit 1
+            fi
+          fi
+          rm -rf "$app"
+          mv "$tmp/unpacked/T3 Code.app" "$app"
+          xattr -dr com.apple.quarantine "$app" 2>/dev/null || true
+          if [ "$running" = true ]; then open "$app"; fi
+          echo "Installed T3 Code $version (was ${installed:-not installed})."
           EOF
+          } > install-mac.sh
+          sh -n install-mac.sh
+          cat install-mac.sh
 
       - name: Publish release
         uses: softprops/action-gh-release@v3
@@ -216,7 +250,7 @@ jobs:
           body: |
             Built from `${{ needs.preflight.outputs.ref }}`.
 
-            Mac: `curl -fsSL ${{ github.server_url }}/${{ github.repository }}/releases/latest/download/install-mac.sh | sh`
+            Mac, newest release: `curl -fsSL ${{ github.server_url }}/${{ github.repository }}/releases/latest/download/install-mac.sh | sh`
           make_latest: true
           files: |
             release-assets/*.dmg
