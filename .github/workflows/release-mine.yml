@@ -49,7 +49,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          base="$(git describe --tags --match 'v*-nightly.*' --abbrev=0 HEAD)"
+          base="$(git describe --tags --match 'v*-nightly.*' --exclude 'v*+mine.*' --abbrev=0 HEAD)"
           version="${base#v}+mine.$(git rev-parse HEAD | cut -c1-10)"
           if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
             echo "Tag $GITHUB_REF_NAME does not match this commit; tag it v$version." >&2
