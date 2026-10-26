@@ -1331,6 +1331,8 @@ const make = Effect.gen(function* () {
     readonly parent: Pick<OrchestrationV2ThreadProjection, "thread">;
     readonly target: OrchestratorMcpTarget | undefined;
     readonly providers: ReadonlyArray<ServerProvider>;
+    /** Defaults to the parent's project. */
+    readonly projectId?: ProjectId;
     /** Receipt replays bypass current settings because they start no work. Dispatch must reuse the checked command ID. */
     readonly skipProjectEnablementFilter?: boolean;
   }): Effect.fn.Return<ResolvedTarget, OrchestratorMcpFailure> {
@@ -1365,7 +1367,7 @@ const make = Effect.gen(function* () {
         const enabledForProject =
           input.skipProjectEnablementFilter === true ||
           (yield* threadManagement.isProviderInstanceEnabledForProject({
-            projectId: input.parent.thread.projectId,
+            projectId: input.projectId ?? input.parent.thread.projectId,
             instanceId: candidate.instanceId,
           }));
         if (enabledForProject) {
@@ -2155,11 +2157,31 @@ const make = Effect.gen(function* () {
         requestKey: key,
         operation: "delegate-task",
       });
+      if (
+        (input.projectId !== undefined || input.baseRef !== undefined) &&
+        input.isolation !== "worktree"
+      ) {
+        return yield* failure(
+          "invalid_request",
+          'projectId and baseRef need isolation "worktree": the child gets its own checkout.',
+        );
+      }
+      if (input.startFromOrigin !== undefined && input.baseRef === undefined) {
+        return yield* failure("invalid_request", "startFromOrigin needs baseRef.");
+      }
+      const projectId = input.projectId ?? parent.thread.projectId;
+      if (projectId !== parent.thread.projectId && input.baseRef === undefined) {
+        return yield* failure(
+          "invalid_request",
+          `Pass baseRef: your checkout's commit is not a base for project ${projectId}.`,
+        );
+      }
       const isRetryOfAcceptedDelegation = yield* threadManagement.hasReceipt(commandId);
       const target = yield* resolveTargetRechecking({
         parent,
         target: input.target,
         providers,
+        projectId,
         skipProjectEnablementFilter: isRetryOfAcceptedDelegation,
       });
       const runtimeMode = yield* resolveRuntimeMode(
@@ -2172,7 +2194,26 @@ const make = Effect.gen(function* () {
         input.interactionMode,
       );
       let workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy | undefined;
-      if (input.isolation === "worktree" && !isRetryOfAcceptedDelegation) {
+      if (
+        input.isolation === "worktree" &&
+        !isRetryOfAcceptedDelegation &&
+        input.baseRef !== undefined
+      ) {
+        yield* requireProject(projectId);
+        const strategy = {
+          type: "worktree",
+          baseRef: input.baseRef,
+          startFromOrigin: input.startFromOrigin === true,
+        } as const;
+        yield* threadLaunch
+          .checkWorktreeBase({ projectId, workspaceStrategy: strategy })
+          .pipe(
+            Effect.mapError((error) =>
+              failure("invalid_request", `${error.message} No task was started.`),
+            ),
+          );
+        workspaceStrategy = strategy;
+      } else if (input.isolation === "worktree" && !isRetryOfAcceptedDelegation) {
         const project = yield* requireProject(parent.thread.projectId);
         const base = yield* gitDriver
           .resolveCommit({
@@ -2218,6 +2259,7 @@ const make = Effect.gen(function* () {
           modelSelection: target.modelSelection,
           runtimeMode,
           interactionMode,
+          ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
           ...(workspaceStrategy === undefined ? {} : { workspaceStrategy }),
           // Async delegations wake the parent on every child terminal; wait
           // delegations deliver through the blocking tool call, so a wake is

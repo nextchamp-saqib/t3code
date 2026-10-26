@@ -7,6 +7,7 @@ import {
   NodeId,
   ORCHESTRATOR_MCP_RUNNING_TASK_NEXT,
   type OrchestratorMcpCapabilitiesResult,
+  type OrchestratorMcpDelegateTaskInput,
   OrchestratorMcpTarget,
   type OrchestrationV2ThreadShell,
   type ScheduledTask,
@@ -1597,6 +1598,202 @@ describe("OrchestratorMcpService provider resolution", () => {
       }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(layerDependencies))));
     }),
   );
+
+  describe("worktree delegation", () => {
+    const otherProjectId = ProjectId.make("project:mcp-providers-other");
+    const task = {
+      id: taskId,
+      threadId: parentThreadId,
+      runId: parentRunId,
+      parentNodeId,
+      origin: "app_owned",
+      createdBy: "agent",
+      driver: ProviderDriverKind.make("codex"),
+      providerInstanceId: codexInstanceId,
+      providerThreadId: null,
+      childThreadId,
+      nativeTaskRef: null,
+      prompt: "Build the ticket.",
+      title: null,
+      model: "gpt-5.4",
+      status: "running",
+      result: null,
+      startedAt: null,
+      completedAt: null,
+    };
+
+    const delegate = (input: Omit<OrchestratorMcpDelegateTaskInput, "task">) =>
+      Effect.gen(function* () {
+        const dispatched = yield* Ref.make<ReadonlyArray<OrchestrationV2ServerCommand>>([]);
+        const checkedBases = yield* Ref.make<ReadonlyArray<unknown>>([]);
+        let delegated = false;
+        const layerDependencies = Layer.mergeAll(
+          NodeServices.layer,
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            hasReceipt: () => Effect.succeed(false),
+            getThreadRecords: (threadId) =>
+              Effect.succeed(
+                threadId === parentThreadId
+                  ? {
+                      ...parentProjection(delegated ? [task] : []),
+                      thread: { ...parentProjection([]).thread, worktreePath: null },
+                    }
+                  : childProjection,
+              ),
+            assertProviderInstanceEnabled: () => Effect.void,
+            dispatch: (command) =>
+              Ref.update(dispatched, (commands) => [...commands, command]).pipe(
+                Effect.andThen(
+                  Effect.sync(() => {
+                    delegated = true;
+                  }),
+                ),
+                Effect.as({
+                  sequence: 1,
+                  storedEvents: [
+                    {
+                      sequence: 1,
+                      commandId: null,
+                      event: { type: "subagent.updated", payload: task },
+                    },
+                  ],
+                } as never),
+              ),
+          }),
+          providerRegistryLayer([
+            providerSnapshot({
+              instanceId: codexInstanceId,
+              driver: ProviderDriverKind.make("codex"),
+              model: "gpt-5.4",
+            }),
+          ]),
+          adapterRegistryLayer([codexInstanceId]),
+          Layer.mock(ProjectService.ProjectService)({
+            getById: (id) =>
+              Effect.succeedSome({
+                id,
+                title: id === projectId ? "Parent" : "Other",
+                workspaceRoot: id === projectId ? "/repo" : "/other-repo",
+              } as never),
+          }),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+          Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+          ServerSettings.layerTest(),
+        );
+        const layerService = OrchestratorMcpService.layer.pipe(
+          Layer.provide(
+            Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+              checkWorktreeBase: (request) =>
+                Ref.update(checkedBases, (requests) => [...requests, request]).pipe(
+                  Effect.andThen(
+                    request.workspaceStrategy.type === "worktree" &&
+                      request.workspaceStrategy.baseRef === "missing"
+                      ? Effect.fail(
+                          new ThreadLaunchService.ThreadLaunchBaseRefError({
+                            projectId: request.projectId,
+                            projectTitle: "Other",
+                            workspaceRoot: "/other-repo",
+                            baseRef: "missing",
+                          }),
+                        )
+                      : Effect.void,
+                  ),
+                ),
+            }),
+          ),
+          Layer.provide(
+            Layer.mock(GitVcsDriver.GitVcsDriver)({
+              resolveCommit: () => Effect.succeed({ commitSha: "parent-sha" } as never),
+            }),
+          ),
+          Layer.provide(layerDependencies),
+        );
+        const result = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
+          Effect.flatMap((service) =>
+            service.delegateTask(scope, { task: "Build the ticket.", mode: "async", ...input }),
+          ),
+          Effect.provide(layerService),
+          Effect.result,
+        );
+        return {
+          result,
+          commands: yield* Ref.get(dispatched),
+          checkedBases: yield* Ref.get(checkedBases),
+        };
+      });
+
+    it.effect("starts the child in another project at the base ref", () =>
+      Effect.gen(function* () {
+        const { result, commands, checkedBases } = yield* delegate({
+          isolation: "worktree",
+          projectId: otherProjectId,
+          baseRef: "mine",
+          startFromOrigin: true,
+          clientRequestId: "delegate-other-project-1",
+        });
+        assert.isTrue(result._tag === "Success");
+        const workspaceStrategy = {
+          type: "worktree",
+          baseRef: "mine",
+          startFromOrigin: true,
+        } as const;
+        assert.deepEqual(checkedBases, [{ projectId: otherProjectId, workspaceStrategy }]);
+        assert.lengthOf(commands, 1);
+        assert.deepInclude(commands[0], { projectId: otherProjectId, workspaceStrategy });
+      }),
+    );
+
+    it.effect("keeps the parent's project and commit when neither is named", () =>
+      Effect.gen(function* () {
+        const { result, commands, checkedBases } = yield* delegate({
+          isolation: "worktree",
+          clientRequestId: "delegate-parent-project-1",
+        });
+        assert.isTrue(result._tag === "Success");
+        assert.deepEqual(checkedBases, []);
+        assert.lengthOf(commands, 1);
+        assert.notProperty(commands[0], "projectId");
+        assert.deepInclude(commands[0], {
+          workspaceStrategy: { type: "worktree", baseRef: "parent-sha", startFromOrigin: false },
+        });
+      }),
+    );
+
+    it.effect.each([
+      {
+        name: "a project without isolation worktree",
+        input: { projectId: otherProjectId, baseRef: "mine" },
+        message: 'need isolation "worktree"',
+      },
+      {
+        name: "startFromOrigin without a base ref",
+        input: { isolation: "worktree" as const, startFromOrigin: true },
+        message: "startFromOrigin needs baseRef",
+      },
+      {
+        name: "another project without a base ref",
+        input: { isolation: "worktree" as const, projectId: otherProjectId },
+        message: "Pass baseRef",
+      },
+      {
+        name: "a base ref the project cannot resolve",
+        input: { isolation: "worktree" as const, projectId: otherProjectId, baseRef: "missing" },
+        message: "No task was started.",
+      },
+    ])("refuses $name", ({ name, input, message }) =>
+      Effect.gen(function* () {
+        const { result, commands } = yield* delegate({
+          ...input,
+          clientRequestId: `refuse ${name}`,
+        });
+        const failure = result._tag === "Failure" ? result.failure : undefined;
+        assert.ok(failure?._tag === "OrchestratorMcpFailure");
+        assert.equal(failure.code, "invalid_request");
+        assert.include(failure.message, message);
+        assert.lengthOf(commands, 0);
+      }),
+    );
+  });
 
   it.effect(
     "retrying an accepted driver-only delegation replays even after the project disables every candidate",

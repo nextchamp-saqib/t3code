@@ -974,6 +974,158 @@ it.layer(layerTest)("delegated completion delivery repairs", (it) => {
         );
       }),
   );
+
+  const startParentRun = (name: string) =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const sink = yield* EventSink.EventSinkV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make(`thread:${name}-parent`);
+      const seedRunId = RunId.make(`run:${name}-seed`);
+      yield* seedParentWithTerminalTask({
+        threadId,
+        projectId: ProjectId.make(`project:${name}-parent`),
+        runId: seedRunId,
+        rootNodeId: NodeId.make(`node:${name}-seed-root`),
+        taskId: NodeId.make(`node:${name}-seed-task`),
+        deliveryState: "acknowledged",
+        now,
+      });
+      const seedRun = (yield* orchestrator.getThreadProjection(threadId)).runs[0]!;
+      yield* sink.write({
+        events: [
+          {
+            ...runEvent({ threadId, runId: seedRunId, ordinal: 1, status: "completed", now }),
+            payload: { ...seedRun, status: "completed", completedAt: now },
+          },
+        ],
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make(`command:${name}-parent-turn`),
+        threadId,
+        messageId: MessageId.make(`message:${name}-parent-turn`),
+        text: "Delegate the ticket",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+      });
+      const run = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
+      return { threadId, runId: run.id, rootNodeId: run.rootNodeId!, now };
+    });
+
+  it.effect("starts a child in another project at a base ref and wakes the parent", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projects = yield* ProjectService.ProjectService;
+      const sink = yield* EventSink.EventSinkV2;
+      const { threadId, runId, rootNodeId, now } = yield* startParentRun("cross-project");
+      const targetProjectId = ProjectId.make("project:cross-project-target");
+      yield* projects.create({
+        commandId: CommandId.make("command:seed-project:cross-project-target"),
+        projectId: targetProjectId,
+        title: "Target repository",
+        workspaceRoot: "/workspace/target",
+      });
+      const workspaceStrategy = {
+        type: "worktree",
+        baseRef: "mine",
+        startFromOrigin: false,
+      } as const;
+      yield* orchestrator.dispatch({
+        type: "delegated_task.request",
+        createdBy: "agent",
+        creationSource: "mcp",
+        commandId: CommandId.make("command:cross-project-delegate"),
+        parentThreadId: threadId,
+        parentRunId: runId,
+        parentNodeId: rootNodeId,
+        task: "Build the ticket in the other repository",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        projectId: targetProjectId,
+        workspaceStrategy,
+        completionWake: "always",
+      });
+      const task = (yield* orchestrator.getThreadProjection(threadId)).subagents.find(
+        (candidate) => candidate.runId === runId && candidate.status === "running",
+      )!;
+      const child = yield* orchestrator.getThreadProjection(task.childThreadId!);
+      assert.equal(child.thread.projectId, targetProjectId);
+      assert.deepEqual(child.thread.lineage, {
+        parentThreadId: threadId,
+        relationshipToParent: "subagent",
+        rootThreadId: threadId,
+      });
+      assert.isNull(child.thread.worktreePath);
+      assert.equal(child.runs[0]?.status, "preparing");
+      assert.deepEqual(child.runs[0]?.workspacePreparation, workspaceStrategy);
+
+      const afterSequence = yield* sink.latestSequence();
+      yield* sink.write({
+        events: [
+          {
+            ...runEvent({
+              threadId: child.thread.id,
+              runId: child.runs[0]!.id,
+              ordinal: 1,
+              status: "completed",
+              now,
+            }),
+            payload: { ...child.runs[0]!, status: "completed", completedAt: now },
+          },
+        ],
+      });
+      yield* sink.stream({ afterSequence, eventType: "subagent.updated" }).pipe(
+        Stream.filter(
+          (stored) =>
+            stored.event.type === "subagent.updated" &&
+            stored.event.payload.id === task.id &&
+            stored.event.payload.status === "completed",
+        ),
+        Stream.take(1),
+        Stream.runDrain,
+      );
+      const parent = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(
+        parent.subagents.find((candidate) => candidate.id === task.id)?.completionDelivery?.state,
+        "claimed",
+      );
+      assert.deepEqual(
+        parent.runs.find((run) => run.id === runId)?.delegatedCompletion?.delivery?.taskIds,
+        [task.id],
+      );
+    }),
+  );
+
+  it.effect("rejects a child in another project without its own workspace", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const { threadId, runId, rootNodeId } = yield* startParentRun("cross-project-shared");
+      const rejected = yield* orchestrator
+        .dispatch({
+          type: "delegated_task.request",
+          createdBy: "agent",
+          creationSource: "mcp",
+          commandId: CommandId.make("command:cross-project-shared-delegate"),
+          parentThreadId: threadId,
+          parentRunId: runId,
+          parentNodeId: rootNodeId,
+          task: "Work in the parent's checkout of another project",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          projectId: ProjectId.make("project:cross-project-elsewhere"),
+        })
+        .pipe(Effect.flip);
+      assert.equal(rejected._tag, "OrchestratorDispatchError");
+      assert.include(String((rejected as { cause: unknown }).cause), "needs its own workspace");
+      assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).subagents, 1);
+    }),
+  );
 });
 
 const reconcileCommandId = (name: string) => CommandId.make(`command:runtime-reconcile:${name}`);

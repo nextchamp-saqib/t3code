@@ -152,9 +152,20 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
   isolation: Schema.optional(
     Schema.Literals(["shared", "worktree"]).annotate({
       description:
-        "'shared' (default): parent checkout. 'worktree': new prepared checkout from the parent commit, for a separate checkout or PR per child. Uncommitted edits stay out.",
+        "'shared' (default): parent checkout. 'worktree': new prepared checkout from the parent commit or `baseRef`, for a separate checkout or PR per child. Uncommitted edits stay out.",
     }),
   ),
+  projectId: Schema.optional(ProjectId).annotate({
+    description:
+      "Isolation 'worktree' only: check out this project's repository instead of yours; `t3_project_list` shows ids. Needs `baseRef`. The child stays your subagent.",
+  }),
+  baseRef: Schema.optional(TrimmedNonEmptyString).annotate({
+    description:
+      "Isolation 'worktree' only: branch, tag, or commit to check out instead of your commit.",
+  }),
+  startFromOrigin: Schema.optional(Schema.Boolean).annotate({
+    description: "With `baseRef`: fetch it from the remote first, for a branch others push to.",
+  }),
   mode: Schema.optional(
     Schema.Literals(["async", "wait"]).annotate({
       description:
