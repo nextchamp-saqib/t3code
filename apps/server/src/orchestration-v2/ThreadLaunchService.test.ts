@@ -1727,6 +1727,66 @@ it.effect("schedules an accepted preparing message exactly once across concurren
   }),
 );
 
+it.effect.each([
+  { name: "another project", childProjectId: otherProjectId, workspaceRoot: "/other-repo" },
+  { name: "the parent's project", childProjectId: undefined, workspaceRoot: "/repo" },
+])("checks out a delegated child's base ref in $name", ({ name, childProjectId, workspaceRoot }) =>
+  Effect.gen(function* () {
+    const setupStarted = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      runSetup: () =>
+        Deferred.succeed(setupStarted, undefined).pipe(Effect.as({ status: "no-script" as const })),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const parent = yield* launches.launch(
+        launchInput({
+          command: `command:delegate-parent:${name}`,
+          thread: `thread:delegate-parent:${name}`,
+          message: "Delegate the ticket",
+        }),
+      );
+      const parentRun = parent.projection.runs[0]!;
+      const commandId = CommandId.make(`command:delegate-child:${name}`);
+      const delegated = yield* threads.dispatch({
+        type: "delegated_task.request",
+        createdBy: "agent",
+        creationSource: "mcp",
+        commandId,
+        parentThreadId: parent.threadId,
+        parentRunId: parentRun.id,
+        parentNodeId: parentRun.rootNodeId!,
+        task: "Build the ticket",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        ...(childProjectId === undefined ? {} : { projectId: childProjectId }),
+        workspaceStrategy: { type: "worktree", baseRef: "mine", startFromOrigin: false },
+      });
+      const childRun = delegated.storedEvents.find(
+        (stored) =>
+          stored.event.type === "run.created" && stored.event.threadId !== parent.threadId,
+      )!.event;
+      yield* launches.prepareRun({
+        commandId,
+        threadId: childRun.threadId,
+        runId: childRun.runId!,
+      });
+      yield* Deferred.await(setupStarted);
+
+      assert.deepInclude(harness.createWorktree.mock.calls[0]?.[0], {
+        cwd: workspaceRoot,
+        refName: "mine",
+      });
+      const child = yield* threads.getThreadProjection(childRun.threadId);
+      assert.equal(child.thread.projectId, childProjectId ?? projectId);
+      assert.equal(child.thread.lineage.relationshipToParent, "subagent");
+      assert.equal(child.thread.worktreePath, "/repo-worktrees/feature");
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
 it.effect("creates a strong provider-thread mapping for an imported native session", () => {
   const harness = makeHarness();
   return Effect.gen(function* () {

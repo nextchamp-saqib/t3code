@@ -7103,6 +7103,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
 
+      // The parent's checkout belongs to the parent's project.
+      if (
+        command.projectId !== undefined &&
+        command.projectId !== parentProjection.thread.projectId &&
+        command.workspaceStrategy === undefined
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `A delegated task in project ${command.projectId} needs its own workspace.`,
+        });
+      }
+
       const targetAdapter = yield* providerAdapters.get(command.modelSelection.instanceId).pipe(
         Effect.mapError(
           (cause) =>
@@ -7148,6 +7161,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }),
         runtimeMode: command.runtimeMode,
         interactionMode: command.interactionMode,
+        ...(command.projectId === undefined ? {} : { projectId: command.projectId }),
         ...(command.workspaceStrategy === undefined ? {} : { branch: null, worktreePath: null }),
       };
       const task: OrchestrationV2Subagent = {
