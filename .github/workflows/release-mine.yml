@@ -9,6 +9,17 @@ on:
   push:
     tags:
       - 'v*\+mine.*'
+  # Rebuilds a pushed tag on another macOS runner when macos-26 has none:
+  # gh workflow run release-mine.yml --ref <tag> -f mac_runner=macos-15
+  workflow_dispatch:
+    inputs:
+      mac_runner:
+        description: macOS arm64 runner label
+        type: choice
+        options:
+          - macos-26
+          - macos-15
+        default: macos-26
 
 permissions:
   actions: read
@@ -131,7 +142,7 @@ jobs:
       clerk_cli_oauth_client_id: ${{ needs.preflight.outputs.clerk_cli_oauth_client_id }}
       relay_url: ${{ needs.preflight.outputs.relay_url }}
       label: macOS arm64
-      runner: macos-26
+      runner: ${{ inputs.mac_runner || 'macos-26' }}
       platform: mac
       target: dmg
       arch: arm64
@@ -268,7 +279,7 @@ jobs:
             Built from `${{ needs.preflight.outputs.ref }}`.
 
             Mac, newest release: `curl -fsSL ${{ github.server_url }}/${{ github.repository }}/releases/latest/download/install-mac.sh | sh`
-          # GitHub picks latest by semver, then date, so a rerun of an older tag stays behind.
+          # GitHub picks latest by semver, then date, ignoring +mine: a rerun of an older tag on the same nightly base becomes latest.
           make_latest: legacy
           files: |
             release-assets/*.dmg
