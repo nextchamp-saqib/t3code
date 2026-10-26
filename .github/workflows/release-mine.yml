@@ -8,7 +8,7 @@ name: Release mine
 on:
   push:
     tags:
-      - "v*+mine.*"
+      - 'v*\+mine.*'
 
 permissions:
   actions: read
