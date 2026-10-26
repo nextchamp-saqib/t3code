@@ -198,16 +198,24 @@ jobs:
           zip="${zips[0]}"
           sha256sum t3-*.tar.gz "$zip" > SHA256SUMS
           cat SHA256SUMS
+          app_name="$(unzip -Z1 "$zip" | head -n 1 | cut -d/ -f1)"
+          if [[ "$app_name" != *.app ]]; then
+            echo "Unexpected first entry in $zip: $app_name" >&2
+            exit 1
+          fi
           {
             echo '#!/bin/sh'
             echo "# Installs T3 Code $VERSION from $GITHUB_REPOSITORY unless it is already installed."
             echo "version='$VERSION'"
+            echo "app_name='$app_name'"
             echo "url='$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/v$VERSION/$zip'"
             echo "sha256='$(sha256sum "$zip" | cut -d' ' -f1)'"
             cat <<'EOF'
           set -eu
-          app="/Applications/T3 Code.app"
-          installed="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist" 2>/dev/null || true)"
+          app="/Applications/$app_name"
+          process="${app_name%.app}"
+          # electron-builder drops +mine from file names, so the installed release is kept in an xattr.
+          installed="$(xattr -p dev.t3code.release "$app" 2>/dev/null || true)"
           if [ "$installed" = "$version" ]; then
             echo "T3 Code $version is already installed."
             exit 0
@@ -217,25 +225,26 @@ jobs:
           curl -fsSL "$url" -o "$tmp/app.zip"
           echo "$sha256  $tmp/app.zip" | shasum -a 256 -c - >/dev/null
           ditto -x -k "$tmp/app.zip" "$tmp/unpacked"
-          test -d "$tmp/unpacked/T3 Code.app"
+          test -d "$tmp/unpacked/$app_name"
           running=false
-          if pgrep -x "T3 Code" >/dev/null; then
+          if pgrep -x "$process" >/dev/null; then
             running=true
-            osascript -e 'quit app "T3 Code"'
+            osascript -e "quit app \"$process\""
             for _ in $(seq 60); do
-              pgrep -x "T3 Code" >/dev/null || break
+              pgrep -x "$process" >/dev/null || break
               sleep 1
             done
-            if pgrep -x "T3 Code" >/dev/null; then
-              echo "T3 Code did not quit; nothing was changed." >&2
+            if pgrep -x "$process" >/dev/null; then
+              echo "$process did not quit; nothing was changed." >&2
               exit 1
             fi
           fi
           rm -rf "$app"
-          mv "$tmp/unpacked/T3 Code.app" "$app"
+          mv "$tmp/unpacked/$app_name" "$app"
           xattr -dr com.apple.quarantine "$app" 2>/dev/null || true
+          xattr -w dev.t3code.release "$version" "$app"
           if [ "$running" = true ]; then open "$app"; fi
-          echo "Installed T3 Code $version (was ${installed:-not installed})."
+          echo "Installed T3 Code $version (was ${installed:-unknown})."
           EOF
           } > install-mac.sh
           sh -n install-mac.sh
