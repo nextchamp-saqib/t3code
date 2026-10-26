@@ -103,6 +103,8 @@ const layerDesktopEnvironment = Layer.unwrap(
   }),
 );
 
+declare const __T3CODE_BUILD_RELEASE_BASE_URL__: string | undefined;
+
 const resolveDesktopSshCliRunner = (
   environment: DesktopEnvironment.DesktopEnvironment["Service"],
 ): RemoteT3RunnerOptions => {
@@ -113,7 +115,13 @@ const resolveDesktopSshCliRunner = (
       nodeEngineRange: serverPackageJson.engines.node,
     };
   }
-  return { archiveVersion: environment.appVersion };
+  return {
+    archiveVersion: environment.appVersion,
+    releaseBaseUrl:
+      typeof __T3CODE_BUILD_RELEASE_BASE_URL__ === "undefined"
+        ? null
+        : __T3CODE_BUILD_RELEASE_BASE_URL__,
+  };
 };
 
 const layerDesktopSshEnvironment = Layer.unwrap(
