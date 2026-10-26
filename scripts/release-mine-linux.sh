@@ -30,13 +30,15 @@ build() {
   fi
 
   # A fresh clone, so no local .env or build output leaks into the release.
-  local src
   src="$(mktemp -d "${TMPDIR:-/var/tmp}/t3-mine-build.XXXXXX")"
   trap 'rm -rf "$src"' EXIT
   git clone -q --no-checkout "$repo" "$src"
   git -C "$src" sparse-checkout set --no-cone '/*' '!/.repos/'
   git -C "$src" checkout -q --detach "$sha"
   cd "$src"
+  # Shims pick Node from the nearest package.json; only the root pins engines.node.
+  VP_NODE_VERSION="$(node -p 'require("./package.json").engines.node')"
+  export VP_NODE_VERSION
 
   local key
   for key in T3CODE_CLERK_PUBLISHABLE_KEY T3CODE_CLERK_JWT_TEMPLATE T3CODE_CLERK_CLI_OAUTH_CLIENT_ID T3CODE_RELAY_URL; do
@@ -71,7 +73,7 @@ install() {
   local version="${1:?usage: install <version> [t3 update flags...]}"
   shift
   [[ -f "$releases/v$version/SHA256SUMS" ]] || { echo "Not built: $releases/v$version" >&2; exit 1; }
-  local log port pid
+  local port
   log="$(mktemp)"
   python3 -u -m http.server --bind 127.0.0.1 0 --directory "$releases" > "$log" 2>&1 &
   pid=$!
