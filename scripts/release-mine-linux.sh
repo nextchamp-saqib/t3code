@@ -65,7 +65,10 @@ cmd_build() {
     export "$key=$value"
   done
 
-  vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/scripts...
+  # CI's values: the web build reads GITHUB_REPOSITORY, and its license list covers what is installed.
+  GITHUB_REPOSITORY="$(git -C "$repo" remote get-url origin | sed -E 's#^.*github\.com[:/]##; s#\.git$##')"
+  export GITHUB_REPOSITORY
+  vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
   node scripts/update-release-package-versions.ts "$version"
   vp run --filter t3 build
   cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target x86_64-unknown-linux-gnu
