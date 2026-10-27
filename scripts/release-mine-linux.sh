@@ -14,7 +14,7 @@ set -euo pipefail
 
 export PATH="$HOME/.local/share/vite-plus/bin:$HOME/.cargo/bin:$PATH"
 releases="${T3_MINE_RELEASES:-$HOME/.cache/t3-mine-releases}"
-repo="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+repo="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
 
 # Sets sha and version as release-mine.yml's preflight resolves them.
 resolve() {
@@ -35,15 +35,9 @@ cmd_version() {
   echo "$version"
 }
 
-cmd_build() {
-  resolve "$@"
-  local out="$releases/v$version"
-  if [[ -f "$out/SHA256SUMS" ]]; then
-    echo "Already built: $out" >&2
-    echo "$version"
-    return
-  fi
-
+# Checks out $sha in a fresh clone, $src, with the inputs release-mine.yml
+# gives its builds, and installs dependencies at $version. Leaves the shell in $src.
+prepare() {
   # A fresh clone, so no local .env or build output leaks into the release.
   src="$(mktemp -d "${TMPDIR:-/var/tmp}/t3-mine-build.XXXXXX")"
   trap 'rm -rf "$src"' EXIT
@@ -70,6 +64,18 @@ cmd_build() {
   export GITHUB_REPOSITORY
   vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
   node scripts/update-release-package-versions.ts "$version"
+}
+
+cmd_build() {
+  resolve "$@"
+  local out="$releases/v$version"
+  if [[ -f "$out/SHA256SUMS" ]]; then
+    echo "Already built: $out" >&2
+    echo "$version"
+    return
+  fi
+
+  prepare
   vp run --filter t3 build
   cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target x86_64-unknown-linux-gnu
 
@@ -108,6 +114,9 @@ cmd_install() {
   [[ -n "$port" ]] || { echo "The local release server did not start: $(cat "$log")" >&2; exit 1; }
   T3CODE_RELEASE_BASE_URL="http://127.0.0.1:$port" "${T3:-$HOME/.local/bin/t3}" update "$version" --yes "$@"
 }
+
+# release-mine-mac.sh sources this file for resolve and prepare.
+[[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
 
 case "${1:-}" in
   version) shift; cmd_version "$@" ;;
