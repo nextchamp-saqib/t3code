@@ -409,6 +409,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.mathRenderingEnabled !== DEFAULT_UNIFIED_SETTINGS.mathRenderingEnabled
       ? ["Render math"]
       : []),
+    ...(settings.showChangedFilesInChat !== DEFAULT_UNIFIED_SETTINGS.showChangedFilesInChat
+      ? ["Show changed files in chat"]
+      : []),
     ...(settings.redesignEnabled !== DEFAULT_UNIFIED_SETTINGS.redesignEnabled
       ? ["New design"]
       : []),
@@ -585,6 +588,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       diffColorScheme: DEFAULT_UNIFIED_SETTINGS.diffColorScheme,
       chatWidth: DEFAULT_UNIFIED_SETTINGS.chatWidth,
       mathRenderingEnabled: DEFAULT_UNIFIED_SETTINGS.mathRenderingEnabled,
+      showChangedFilesInChat: DEFAULT_UNIFIED_SETTINGS.showChangedFilesInChat,
       redesignEnabled: DEFAULT_UNIFIED_SETTINGS.redesignEnabled,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       notificationMode: DEFAULT_UNIFIED_SETTINGS.notificationMode,

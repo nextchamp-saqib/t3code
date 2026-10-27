@@ -352,6 +352,31 @@ export function AppearanceSettingsPanel() {
           }
         />
         <SettingsRow
+          {...searchableSetting("changed-files-in-chat")}
+          description="Show the list of files a turn changed under each assistant message. The diff panel stays available either way."
+          resetAction={
+            settings.showChangedFilesInChat !== DEFAULT_UNIFIED_SETTINGS.showChangedFilesInChat ? (
+              <SettingResetButton
+                label="changed files in chat"
+                onClick={() =>
+                  updateSettings({
+                    showChangedFilesInChat: DEFAULT_UNIFIED_SETTINGS.showChangedFilesInChat,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.showChangedFilesInChat}
+              onCheckedChange={(checked) =>
+                updateSettings({ showChangedFilesInChat: Boolean(checked) })
+              }
+              aria-label="Show changed files in chat"
+            />
+          }
+        />
+        <SettingsRow
           {...searchableSetting("math-rendering")}
           description="Typeset LaTeX math, such as $x^2$ or \[x^2\], in messages and Markdown previews. The composer keeps TeX source editable."
           resetAction={
