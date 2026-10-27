@@ -359,6 +359,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["reasoning effort thinking bars graph word label level composer"],
   },
   {
+    id: "changed-files-in-chat",
+    title: "Show changed files in chat",
+    to: "/settings/appearance",
+    searchTerms: ["diff card summary turn files edited"],
+  },
+  {
     id: "math-rendering",
     title: "Render math",
     to: "/settings/appearance",
