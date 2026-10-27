@@ -156,7 +156,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("release-mine-m
     ).toBe(version);
     expect(git(fixture.clone, "rev-parse", "HEAD")).toBe(git(fixture.work, "rev-parse", "mine"));
     const log = await fixture.readLog();
-    expect(log).toContain("ssh -o BatchMode=yes saqib-dev ~/.local/bin/t3 --version");
+    expect(log).toContain(
+      "ssh -o BatchMode=yes -o ClearAllForwardings=yes saqib-dev ~/.local/bin/t3 --version",
+    );
     expect(log).toContain(`node scripts/update-release-package-versions.ts ${version}`);
     expect(log).toContain("vp run build:desktop");
     expect(log).toContain(`--platform mac --target zip --arch arm64 --build-version ${version}`);
