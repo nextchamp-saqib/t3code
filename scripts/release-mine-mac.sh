@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fork only. Builds the macOS arm64 app of the mine commit saqib-dev runs, the
-# way release-mine.yml's Mac job does, and installs it with install-mac.sh.
+# way release-desktop.yml's macOS job does, and installs it with install-mac.sh.
 # Run it from Terminal, not inside T3 Code: the install quits the app.
 #
 #   scripts/release-mine-mac.sh [<version>]
@@ -8,7 +8,8 @@
 # Without a version it builds the one `t3 --version` reports on $T3_MINE_HOST
 # (default saqib-dev) over ssh. Builds go to $T3_MINE_DIR (default
 # ~/.cache/t3-mine)/releases/v<version>/, and only the installed one is kept.
-# Run from the clone at $T3_MINE_DIR/t3code, it first moves that clone to origin/mine.
+# It runs only from its own clone, $T3_MINE_DIR/t3code, and first moves that
+# clone to origin/mine.
 set -euo pipefail
 
 mine_dir="${T3_MINE_DIR:-$HOME/.cache/t3-mine}"
@@ -38,10 +39,13 @@ check_tools() {
   fi
 }
 
-# Runs the newest copy of this script when it lives in its own clone.
+# Runs the newest copy of this script. Other checkouts are refused, so nothing fetches into them.
 update_self() {
   local clone="$mine_dir/t3code"
-  [[ -d "$clone" && "$(cd "$here/.." && pwd)" == "$(cd "$clone" && pwd)" ]] || return 0
+  if [[ ! -d "$clone" || "$(cd "$here/.." && pwd)" != "$(cd "$clone" && pwd)" ]]; then
+    echo "Run this from its own clone: git clone -b mine https://github.com/nextchamp-saqib/t3code.git $clone" >&2
+    exit 1
+  fi
   git -C "$clone" fetch -q origin mine
   # mine is force-pushed when it moves to a newer upstream tag, so check out rather than merge.
   if [[ "$(git -C "$clone" rev-parse HEAD)" != "$(git -C "$clone" rev-parse origin/mine)" ]]; then

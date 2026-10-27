@@ -22,6 +22,10 @@ const stubs: Record<string, string> = {
   vp: python(`
 open(os.environ["STUB_LOG"], "a").write("vp " + " ".join(sys.argv[1:]) + "\\n")
 if sys.argv[1:3] == ["run", "dist:desktop:artifact"]:
+    with open(os.environ["STUB_LOG"], "a") as log:
+        for key in ["T3CODE_RELEASE_BASE_URL", "T3CODE_DESKTOP_UPDATE_REPOSITORY"]:
+            log.write(f"{key}={os.environ.get(key)}\\n")
+        log.write("HEAD=" + open(".git/HEAD").read())
     version = sys.argv[sys.argv.index("--build-version") + 1]
     os.makedirs("release", exist_ok=True)
     with zipfile.ZipFile(f"release/T3-Code-{version.split('+')[0]}-arm64.zip", "w") as z:
@@ -89,11 +93,14 @@ async function makeFixture() {
   git(root, "clone", "-q", "-b", "mine", origin, clone);
 
   const log = NodePath.join(root, "stub.log");
-  const run = (args: string[], options: { readonly path?: string } = {}) =>
+  const run = (
+    args: string[],
+    options: { readonly path?: string; readonly checkout?: string } = {},
+  ) =>
     new Promise<{ code: number | null; output: string }>((resolve, reject) => {
       const child = NodeChildProcess.spawn(
         "bash",
-        [NodePath.join(clone, "scripts/release-mine-mac.sh"), ...args],
+        [NodePath.join(options.checkout ?? clone, "scripts/release-mine-mac.sh"), ...args],
         {
           env: {
             PATH: options.path ?? `${bin}:/usr/bin:/bin`,
@@ -154,6 +161,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("release-mine-m
     expect(log).toContain("vp run build:desktop");
     expect(log).toContain(`--platform mac --target zip --arch arm64 --build-version ${version}`);
     expect(log).toContain(`codesign --force --deep --sign - `);
+    expect(log).toContain(`HEAD=${fixture.shipped}\n`);
+    expect(log).toContain("T3CODE_DESKTOP_UPDATE_REPOSITORY=none\n");
+    expect(log).toMatch(/^T3CODE_RELEASE_BASE_URL=https:\/\/github\.com\/.+\/releases\/download$/m);
     expect(await NodeFSP.readdir(NodePath.join(fixture.root, "tmp"))).toEqual([]);
 
     await NodeFSP.rm(NodePath.join(fixture.root, "stub.log"));
@@ -187,6 +197,17 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("release-mine-m
     expect(result.code).toBe(1);
     expect(result.output).toContain(`builds as ${base}+mine.${fixture.shipped.slice(0, 10)}`);
     expect(await fixture.installed()).toBeUndefined();
+  });
+
+  it("refuses to run from another checkout and leaves it alone", async () => {
+    await using fixture = await makeFixture();
+    const refs = git(fixture.work, "show-ref");
+
+    const result = await fixture.run([], { checkout: fixture.work });
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("Run this from its own clone");
+    expect(git(fixture.work, "show-ref")).toBe(refs);
+    expect(await fixture.readLog()).toBe("");
   });
 
   it("names the install command for each missing tool and changes nothing", async () => {
