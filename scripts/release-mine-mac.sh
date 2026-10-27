@@ -56,7 +56,8 @@ update_self() {
 
 server_version() {
   local host="${T3_MINE_HOST:-saqib-dev}" out
-  if ! out="$(ssh -o BatchMode=yes "$host" '~/.local/bin/t3 --version')"; then
+  # Skip the host's LocalForward lines: an open session already holds those ports.
+  if ! out="$(ssh -o BatchMode=yes -o ClearAllForwardings=yes "$host" '~/.local/bin/t3 --version')"; then
     echo "Could not read the T3 version on $host. Pass it instead: $0 <version>" >&2
     exit 1
   fi
