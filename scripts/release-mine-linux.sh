@@ -7,7 +7,8 @@
 #   scripts/release-mine-linux.sh build [<commit>]
 #   scripts/release-mine-linux.sh install <version> [t3 update flags...]
 #
-# Needs Vite+ in ~/.local/share/vite-plus and cargo in ~/.cargo. Releases go
+# Needs Vite+ in ~/.local/share/vite-plus, cargo in ~/.cargo and patchelf on
+# PATH (`uv tool install patchelf` without root). Releases go
 # to $T3_MINE_RELEASES (default ~/.cache/t3-mine-releases)/v<version>/, laid
 # out like a GitHub release download directory.
 set -euo pipefail
@@ -75,6 +76,8 @@ cmd_build() {
     return
   fi
 
+  # build-cli-archive.ts sets the binary's rpath for its bundled libatomic.
+  command -v patchelf > /dev/null || { echo "patchelf is missing: uv tool install patchelf" >&2; exit 1; }
   prepare
   vp run --filter t3 build
   cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target x86_64-unknown-linux-gnu
